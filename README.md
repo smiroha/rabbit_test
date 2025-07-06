@@ -10,8 +10,8 @@ _Erlang application for testing RabbitMQ cluster and quorum queues._
 ### - Installation
 ```sh
 # Example installation steps
-git clone git@gitlab.int.favbet.tech:erlang/betting_line/bullet_front.git master
-cd bullet_front
+git clone git@github.com:smiroha/rabbit_test.git master
+cd rabbit_test
 gmake
 ```
 
