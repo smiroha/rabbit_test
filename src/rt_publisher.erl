@@ -5,51 +5,51 @@
 -include_lib("amqp_client/include/amqp_client.hrl").
 -include("rabbit_test.hrl").
 
--export([start_link/1]).
+-export([start_link/2]).
 -export([init/1, handle_info/2, handle_call/3, handle_cast/2, terminate/2]).
 
 
-start_link(Tid) ->
-	gen_server:start_link({local, ?MODULE}, ?MODULE, [Tid], []).
+start_link(Name, Tid) ->
+	gen_server:start_link({local, Name}, ?MODULE, [Name, Tid], []).
 
-init([Tid]) ->
+init([Name, Tid]) ->
 	_ = process_flag(trap_exit, true),
 	_ = erlang:send_after(50, self(), connect),
-	{ok, #{tid => Tid}}.
+	{ok, #{name => Name, tid => Tid}}.
 
 
 handle_call(_, _, State) -> {reply, ok, State}.
 
 handle_cast(_, State) -> {noreply, State}.
 
-handle_info(publish, State = #{tid := Tid, channel := Chan}) ->
-	Seq = ets:update_counter(Tid, seq, {2, 1}, {seq, 0}),
+handle_info(publish, State = #{name := Name, tid := Tid, channel := Chan}) ->
+	Seq = ets:update_counter(Tid, Name, {2, 1}, {Name, 0}),
 	Method = #'basic.publish'{exchange = ?EXCHANGE},
 	Content = #amqp_msg{
 		props = #'P_basic'{delivery_mode = 2},
-		payload = term_to_binary(#{seq => Seq, form => node()})
+		payload = term_to_binary(#{seq => Seq, from => Name})
 	},
 	ok = amqp_channel:cast(Chan, Method, Content),
 	{noreply, State};
 handle_info({'DOWN', MRef, _, _Pid, Reason}, State = #{amqp_conn_mref := MRef}) -> {stop, {died_conn, Reason}, State};
 handle_info({'DOWN', MRef, _, _Pid, Reason}, State = #{amqp_chan_mref := MRef}) -> {stop, {died_chan, Reason}, State};
-handle_info(connect, OldState = #{tid := Tid}) ->
+handle_info(connect, OldState = #{name := Name, tid := Tid}) ->
 	{ok, State} = connect(OldState),
-	logger:info("publisher (re)connected seq:~p", [ets:lookup(Tid, seq)]),
-	{ok, _TRef} = timer:send_interval(10, publish), %% 100 rps
+	logger:info("publisher:~p (re)connected seq:~p", [Name, ets:lookup(Tid, Name)]),
+	{ok, _TRef} = timer:send_interval(10, publish),
 	{noreply, State};
-handle_info(Msg, State) ->
-	logger:warning("publisher handle unexpected msg:~p", [Msg]),
+handle_info(Msg, State = #{name := Name}) ->
+	logger:warning("publisher:~p handle unexpected msg:~p", [Name, Msg]),
 	{noreply, State}.
 
-terminate(Reason, _State) ->
-	logger:warning("publisher terminated by reason:~p", [Reason]),
+terminate(Reason, #{name := Name}) ->
+	logger:warning("publisher:~p terminated by reason:~p", [Name, Reason]),
 	timer:sleep(3000),
 	ok.
 
 %% @private
-connect(State) ->
-	ConnProps = [{<<"connection_name">>, longstr, <<"publisher">>}],
+connect(State = #{name := Name}) ->
+	ConnProps = [{<<"connection_name">>, longstr, atom_to_binary(Name)}],
 	AmqpParams = #amqp_params_network{client_properties = ConnProps},
 	{ok, AMQPConn} = amqp_connection:start(AmqpParams),
 	{ok, AMQPChan} = amqp_connection:open_channel(AMQPConn),
