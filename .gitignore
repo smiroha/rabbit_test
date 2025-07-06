@@ -1,0 +1,7 @@
+.erlang.mk
+.idea
+_docker
+_rel
+deps
+ebin
+rabbit_test.d

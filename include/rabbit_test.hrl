@@ -1,0 +1,1 @@
+-define(EXCHANGE, <<"rb_exchange">>).

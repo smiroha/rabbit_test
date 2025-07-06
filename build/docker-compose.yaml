@@ -1,0 +1,141 @@
+x-rabbitmq: &rabbitmq
+  build:
+    context: $PWD
+    dockerfile: build/Dockerfile.rabbitmq
+  deploy:
+    resources:
+      reservations:
+        cpus: '0.1'
+        memory: 256M
+      limits:
+        cpus: '2.0'
+        memory: 1G
+  healthcheck:
+    test: rabbitmq-diagnostics -q check_port_connectivity
+    start_period: 15s
+    start_interval: 10s
+    interval: 2s
+    timeout: 3s
+    retries: 3
+
+services:
+  rmq01.local:
+    <<: *rabbitmq
+    container_name: rmq01.local
+    configs:
+      - source: rabbitmq.conf
+        target: /etc/rabbitmq/rabbitmq.conf
+      - source: rabbitmq-definitions-common
+        target: /etc/rabbitmq/definitions/common.json
+    environment:
+      - RABBITMQ_NODENAME=rabbit@rmq01.local
+      - RABBITMQ_ERLANG_COOKIE=CONCOOKIE
+      - RABBITMQ_USE_LONGNAME=true
+
+  rmq02.local:
+    <<: *rabbitmq
+    container_name: rmq02.local
+    depends_on: [rmq01.local]
+    configs:
+      - source: rabbitmq.conf
+        target: /etc/rabbitmq/rabbitmq.conf
+      - source: rabbitmq-definitions-common
+        target: /etc/rabbitmq/definitions/common.json
+    environment:
+      - RABBITMQ_NODENAME=rabbit@rmq02.local
+      - RABBITMQ_ERLANG_COOKIE=CONCOOKIE
+      - RABBITMQ_USE_LONGNAME=true
+
+  rmq03.local:
+    <<: *rabbitmq
+    container_name: rmq03.local
+    depends_on: [rmq01.local]
+    configs:
+      - source: rabbitmq.conf
+        target: /etc/rabbitmq/rabbitmq.conf
+      - source: rabbitmq-definitions-common
+        target: /etc/rabbitmq/definitions/common.json
+    environment:
+      - RABBITMQ_NODENAME=rabbit@rmq03.local
+      - RABBITMQ_ERLANG_COOKIE=CONCOOKIE
+      - RABBITMQ_USE_LONGNAME=true
+
+  rmq-lb:
+    image: haproxy:2.9-alpine
+    container_name: rmq-lb
+    depends_on:
+      - rmq01.local
+      - rmq02.local
+      - rmq03.local
+    ports:
+      - '5672:5672'
+      - "15672:15672"
+    configs:
+      - source: haproxy.cfg
+        target: /usr/local/etc/haproxy/haproxy.cfg
+
+configs:
+  rabbitmq.conf:
+    content: |
+      cluster_formation.peer_discovery_backend = classic_config
+      cluster_formation.classic_config.nodes.1 = rabbit@rmq01.local
+      cluster_formation.classic_config.nodes.2 = rabbit@rmq02.local
+      cluster_formation.classic_config.nodes.3 = rabbit@rmq03.local
+      cluster_partition_handling = pause_minority
+      management.load_definitions = /etc/rabbitmq/definitions
+
+  rabbitmq-definitions-common:
+    content: |-
+      {
+        "rabbitmq_version": "4.1.1",
+      
+        "vhosts": [{"name": "/"}],
+      
+        "users": [{"name": "guest", "password": "guest", "tags": "administrator"}],
+      
+        "permissions": [{ "user": "guest", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*"}],
+      
+        "exchanges": [
+          {"name": "my_exchange", "vhost": "/", "type": "topic", "durable": true, "auto_delete": false}
+        ]
+      }
+
+  haproxy.cfg:
+    content: |
+      global
+          maxconn 2048
+          daemon
+
+      defaults
+          log     global
+          option  tcplog
+          timeout connect 5s
+          timeout client  1m
+          timeout server  1m
+
+      frontend amqp_in
+          bind *:5672
+          mode tcp
+          default_backend amqp_cluster
+
+      backend amqp_cluster
+          mode tcp
+          balance roundrobin
+          option  tcp-check
+          server rmq01 rmq01.local:5672 check fall 2 rise 3
+          server rmq02 rmq02.local:5672 check fall 2 rise 3
+          server rmq03 rmq03.local:5672 check fall 2 rise 3
+
+      frontend ui_in
+          bind *:15672
+          mode http
+          option  httplog
+          default_backend ui_cluster
+
+      backend ui_cluster
+          mode http
+          balance roundrobin
+          option httpchk GET /
+          server rmq01 rmq01.local:15672 check fall 2 rise 3
+          server rmq02 rmq02.local:15672 check fall 2 rise 3
+          server rmq03 rmq03.local:15672 check fall 2 rise 3

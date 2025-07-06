@@ -1,0 +1,3 @@
+-name rabbit_test@127.0.0.1
+-setcookie rabbit_test
+-heart
